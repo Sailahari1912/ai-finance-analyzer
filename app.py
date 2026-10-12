@@ -15,6 +15,15 @@ uploaded_file = st.sidebar.file_uploader(
     "Upload Bank Statement", 
     type=["csv", "xlsx", "xls", "pdf"]
 )
+user_api_key = st.sidebar.text_input(
+    "Gemini API Key (Optional)", 
+    type="password", 
+    help="aistudio.google.com లో ఉచితంగా పొందవచ్చు. ఇవ్వకపోతే ఆఫ్లైన్ రూల్స్ పనిచేస్తాయి."
+)
+
+pdf_password = None
+if uploaded_file is not None and uploaded_file.name.lower().endswith(".pdf"):
+    pdf_password = st.sidebar.text_input("PDF Password (if locked)", type="password")
 
 file_to_process = uploaded_file if uploaded_file is not None else "sample.csv"
 
@@ -24,14 +33,17 @@ if st.sidebar.button("Run Categorization"):
             temp_path = f"temp_{uploaded_file.name}"
             with open(temp_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
-            txns = parse_bank_file(temp_path)
+            txns = parse_bank_file(temp_path, password=pdf_password)
             if os.path.exists(temp_path):
                 os.remove(temp_path)
         else:
             txns = parse_bank_file(file_to_process)
 
         if txns:
-            enriched_txns = categorize_transactions(txns)
+            enriched_txns = categorize_transactions(
+                txns, 
+                api_key=user_api_key.strip() if user_api_key else None
+            )
             data = [
                 {
                     "Date": str(t.date),
@@ -100,7 +112,6 @@ if "df" in st.session_state:
     # --- FEATURE 1: BUDGET CAPS & ALERTS ---
     st.subheader("🎯 Monthly Budget Tracking & Alerts")
     
-    # Extract unique categories present in expense data
     categories_present = sorted(expense_df["Category"].unique().tolist()) if not expense_df.empty else []
     
     default_budgets = {
@@ -128,7 +139,6 @@ if "df" in st.session_state:
                 budget_cap = st.number_input(f"{cat} Budget ($)", min_value=1.0, value=default_val, step=10.0, key=f"budget_{cat}")
                 ratio = min(current_spend / budget_cap, 1.0)
                 
-                # Visual alert indicator
                 if current_spend > budget_cap:
                     st.error(f"🚨 **{cat}**: Spent ${current_spend:.2f} /${budget_cap:.2f} (Over Budget!)")
                 elif current_spend >= 0.8 * budget_cap:
@@ -160,16 +170,18 @@ if "df" in st.session_state:
     st.subheader("🤖 AI Financial Advisor")
     records = df.to_dict(orient="records")
 
+    current_key = user_api_key.strip() if user_api_key else None
+
     if st.button("Generate Comprehensive Spending Audit"):
         with st.spinner("AI is analyzing your finances..."):
-            audit = generate_spending_insights(records)
+            audit = generate_spending_insights(records, api_key=current_key)
             st.markdown(audit)
 
     query = st.chat_input("Ask a question about your spending (e.g., 'How can I save on dining?')")
     if query:
         st.chat_message("user").write(query)
         with st.spinner("Thinking..."):
-            ans = generate_spending_insights(records, user_question=query)
+            ans = generate_spending_insights(records, user_question=query, api_key=current_key)
             st.chat_message("assistant").markdown(ans)
 
 else:

@@ -2,28 +2,35 @@ import os
 import json
 import re
 import time
-from typing import List
+from typing import List, Optional
 from dotenv import load_dotenv
 from google import genai
 from schemas import NormalizedTransaction
 
 load_dotenv()
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+def get_gemini_client(custom_key: Optional[str] = None):
+    key = custom_key or os.getenv("GEMINI_API_KEY")
+    if not key:
+        return None
+    try:
+        return genai.Client(api_key=key)
+    except Exception:
+        return None
 
-# Fallback keyword rules when API rate limits trigger
+# Fallback keyword rules when API key is missing or quota limits trigger
 KEYWORD_RULES = [
     (r"starbucks|coffee|dunkin|mcdonald|chipotle|cafe|subway", "Starbucks", "Food & Dining"),
-    (r"amazon|amzn|walmart|target|ebay", "Amazon", "Shopping"),
-    (r"shell|exxon|bp|chevron|gas|fuel|uber|lyft", "Shell", "Transportation"),
-    (r"payroll|salary|direct dep|deposit", "Payroll", "Income"),
-    (r"kroger|safeway|trader joe|whole foods|costco|grocer", "Groceries", "Groceries"),
-    (r"netflix|spotify|hulu|disney|apple", "Subscription", "Entertainment"),
-    (r"electric|water|gas bill|internet|comcast|verizon|at&t", "Utility Co", "Utilities"),
+    (r"amazon|amzn|walmart|target|ebay|flipkart|myntra", "Amazon", "Shopping"),
+    (r"shell|exxon|bp|chevron|gas|fuel|uber|lyft|ola|petrol", "Shell", "Transportation"),
+    (r"payroll|salary|direct dep|deposit|credit", "Payroll", "Income"),
+    (r"kroger|safeway|trader joe|whole foods|costco|grocer|dmart|blinkit|zepto|instamart", "Groceries", "Groceries"),
+    (r"netflix|spotify|hulu|disney|apple|prime", "Subscription", "Entertainment"),
+    (r"electric|water|gas bill|internet|comcast|verizon|at&t|airtel|jio|electricity", "Utility Co", "Utilities"),
 ]
 
 def fallback_categorize(transactions: List[NormalizedTransaction]) -> List[NormalizedTransaction]:
-    """Local fallback categorizer if API quota limit is reached."""
+    """Local fallback categorizer if API quota limit is reached or no key provided."""
     for txn in transactions:
         desc_lower = txn.raw_description.lower()
         matched = False
@@ -46,10 +53,14 @@ def clean_json_text(text: str) -> str:
         return match.group(0)
     return text
 
-def categorize_transactions(transactions: List[NormalizedTransaction]) -> List[NormalizedTransaction]:
+def categorize_transactions(transactions: List[NormalizedTransaction], api_key: Optional[str] = None) -> List[NormalizedTransaction]:
     """Classifies transactions with Gemini, including rate-limit backoff and offline fallback."""
     if not transactions:
         return []
+
+    client = get_gemini_client(api_key)
+    if not client:
+        return fallback_categorize(transactions)
 
     payload = [
         {"index": idx, "description": txn.raw_description, "amount": txn.amount}
@@ -86,59 +97,7 @@ def categorize_transactions(transactions: List[NormalizedTransaction]) -> List[N
             else:
                 break
 
-    # If all API attempts fail, fall back locally
+    # If API attempts fail, fall back locally
     return fallback_categorize(transactions)
 
-def generate_spending_insights(transactions, user_question: str = None) -> str:
-    """Generates financial insights with quota retry protection."""
-    if not transactions:
-        return "No transactions available to analyze."
-
-    summary_records = []
-    for t in transactions:
-        if isinstance(t, dict):
-            summary_records.append({
-                "date": str(t.get("Date", "")),
-                "amount": t.get("Amount", 0.0),
-                "merchant": t.get("Merchant", "Unknown"),
-                "category": t.get("Category", "Other")
-            })
-        else:
-            summary_records.append({
-                "date": str(t.date),
-                "amount": t.amount,
-                "merchant": t.merchant,
-                "category": t.category
-            })
-
-    if user_question:
-        prompt = (
-            f"You are a personal financial advisor. Based on these categorized transactions:\n"
-            f"{json.dumps(summary_records)}\n\n"
-            f"Answer this user question concisely with clear figures and actionable advice:\n"
-            f"{user_question}"
-        )
-    else:
-        prompt = (
-            f"You are a personal financial advisor. Review these categorized transactions:\n"
-            f"{json.dumps(summary_records)}\n\n"
-            "Provide a concise summary containing:\n"
-            "1. Key spending patterns and biggest expense areas.\n"
-            "2. Practical opportunities to save or optimize spending.\n"
-            "3. Overall financial health assessment."
-        )
-
-    for attempt in range(3):
-        try:
-            interaction = client.interactions.create(
-                model="gemini-3.8-flash",
-                input=prompt
-            )
-            return interaction.output_text
-        except Exception as e:
-            if "too_many_requests" in str(e).lower() or "quota" in str(e).lower():
-                time.sleep(4 * (attempt + 1))
-            else:
-                return f"Unable to generate advice right now: {e}"
-
-    return "API rate limit reached. Please wait a minute and try again."
+def generate_spending_insights(transactions, user_question: str = None
