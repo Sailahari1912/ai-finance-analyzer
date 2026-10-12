@@ -100,4 +100,60 @@ def categorize_transactions(transactions: List[NormalizedTransaction], api_key: 
     # If API attempts fail, fall back locally
     return fallback_categorize(transactions)
 
-def generate_spending_insights(transactions, user_question: str = None
+def generate_spending_insights(transactions, user_question: Optional[str] = None, api_key: Optional[str] = None) -> str:
+    """Generates financial insights with quota retry protection."""
+    if not transactions:
+        return "No transactions available to analyze."
+
+    client = get_gemini_client(api_key)
+    if not client:
+        return "⚠️ Gemini API key is missing. Please provide an API key in the sidebar to use the AI Financial Advisor."
+
+    summary_records = []
+    for t in transactions:
+        if isinstance(t, dict):
+            summary_records.append({
+                "date": str(t.get("Date", "")),
+                "amount": t.get("Amount", 0.0),
+                "merchant": t.get("Merchant", "Unknown"),
+                "category": t.get("Category", "Other")
+            })
+        else:
+            summary_records.append({
+                "date": str(t.date),
+                "amount": t.amount,
+                "merchant": t.merchant,
+                "category": t.category
+            })
+
+    if user_question:
+        prompt = (
+            f"You are a personal financial advisor. Based on these categorized transactions:\n"
+            f"{json.dumps(summary_records)}\n\n"
+            f"Answer this user question concisely with clear figures and actionable advice:\n"
+            f"{user_question}"
+        )
+    else:
+        prompt = (
+            f"You are a personal financial advisor. Review these categorized transactions:\n"
+            f"{json.dumps(summary_records)}\n\n"
+            "Provide a concise summary containing:\n"
+            "1. Key spending patterns and biggest expense areas.\n"
+            "2. Practical opportunities to save or optimize spending.\n"
+            "3. Overall financial health assessment."
+        )
+
+    for attempt in range(3):
+        try:
+            interaction = client.interactions.create(
+                model="gemini-2.5-flash",
+                input=prompt
+            )
+            return interaction.output_text
+        except Exception as e:
+            if "too_many_requests" in str(e).lower() or "quota" in str(e).lower():
+                time.sleep(4 * (attempt + 1))
+            else:
+                return f"Unable to generate advice right now: {e}"
+
+    return "API rate limit reached. Please wait a minute and try again."
