@@ -176,6 +176,7 @@ if "categorized_df" in st.session_state:
     else:
         expenses_df = df[df["amount"] > 0]
         income_df = df[df["amount"] < 0]
+
     # Calculate Core Metrics
     total_expenses = expenses_df["amount"].sum()
     total_income = income_df["amount"].abs().sum() if not income_df.empty else 0.0
@@ -259,8 +260,10 @@ if "categorized_df" in st.session_state:
             st.warning("⚠️ Gemini API key is missing. Please provide an API key in the sidebar to use the AI Financial Advisor.")
         else:
             with st.spinner("Analyzing spending habits with Gemini AI..."):
+                # Pass data safely as records list to prevent DataFrame ambiguity error
+                tx_data = df.to_dict(orient="records") if isinstance(df, pd.DataFrame) else df
                 insights = generate_spending_insights(
-                    df,
+                    tx_data,
                     user_q if user_q else "Provide a detailed spending analysis and budget optimization recommendations.",
                     api_key=gemini_api_key
                 )
