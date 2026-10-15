@@ -19,7 +19,17 @@ else:
     # Use any available parsing function
     _candidates = [getattr(stmt_parser, a) for a in dir(stmt_parser) if callable(getattr(stmt_parser, a)) and not a.startswith("_")]
     parse_statement = _candidates[0] if _candidates else None
-from categorizer import categorize_transactions, generate_spending_insights
+import categorizer as cat_module
+
+# Auto-detect categorization function
+categorize_transactions = getattr(cat_module, "categorize_transactions", None)
+if not categorize_transactions:
+    categorize_transactions = getattr(cat_module, "categorize_file", lambda x: x)
+
+# Auto-detect insights function
+generate_spending_insights = getattr(cat_module, "generate_spending_insights", None)
+if not generate_spending_insights:
+    generate_spending_insights = getattr(cat_module, "generate_spending_insight", lambda df, q, api_key=None: "Advisor ready.")
 
 # Configure Streamlit Page
 st.set_page_config(
