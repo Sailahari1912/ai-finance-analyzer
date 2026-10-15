@@ -147,6 +147,22 @@ st.write("Universal bank statement analysis: CSV, Excel, PDF parsing, automated 
 if "categorized_df" in st.session_state:
     df = st.session_state["categorized_df"]
 
+    # Normalize column names to lowercase for consistency
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    # Map possible amount column names
+    amount_col = None
+    for possible_name in ["amount", "debit", "transaction amount", "trans amount", "total"]:
+        if possible_name in df.columns:
+            amount_col = possible_name
+            break
+
+    if amount_col:
+        df["amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0.0)
+    else:
+        # Fallback if no amount column found: create an empty amount column
+        df["amount"] = 0.0
+
     # Filter out Transfers & Payments for spending charts
     if "category" in df.columns:
         expenses_df = df[
@@ -160,7 +176,6 @@ if "categorized_df" in st.session_state:
     else:
         expenses_df = df[df["amount"] > 0]
         income_df = df[df["amount"] < 0]
-
     # Calculate Core Metrics
     total_expenses = expenses_df["amount"].sum()
     total_income = income_df["amount"].abs().sum() if not income_df.empty else 0.0
