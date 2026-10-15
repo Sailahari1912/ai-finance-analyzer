@@ -128,9 +128,13 @@ if st.sidebar.button("Run Categorization"):
                 categorized_data = categorize_transactions(parsed_data)
                 df = pd.DataFrame(categorized_data)
 
-                # Ensure numeric amount
+                # Ensure single unique columns and numeric amount
+                df = df.loc[:, ~df.columns.duplicated()].copy()
                 if "amount" in df.columns:
-                    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
+                    target_series = df["amount"]
+                    if isinstance(target_series, pd.DataFrame):
+                        target_series = target_series.iloc[:, 0]
+                    df["amount"] = pd.to_numeric(target_series, errors="coerce").fillna(0.0)
 
                 st.session_state["categorized_df"] = df
                 st.success("Statement processed and categorized successfully!")
@@ -147,26 +151,31 @@ st.write("Universal bank statement analysis: CSV, Excel, PDF parsing, automated 
 if "categorized_df" in st.session_state:
     df = st.session_state["categorized_df"]
 
-    # Normalize column names to lowercase for consistency
+    # Deduplicate columns before and after standardizing to lowercase
+    df = df.loc[:, ~df.columns.duplicated()].copy()
     df.columns = [str(c).strip().lower() for c in df.columns]
+    df = df.loc[:, ~df.columns.duplicated()].copy()
 
     # Map possible amount column names
     amount_col = None
-    for possible_name in ["amount", "debit", "transaction amount", "trans amount", "total"]:
+    for possible_name in ["amount", "debit", "transaction amount", "trans amount", "total", "withdrawal"]:
         if possible_name in df.columns:
             amount_col = possible_name
             break
 
     if amount_col:
-        df["amount"] = pd.to_numeric(df[amount_col], errors="coerce").fillna(0.0)
+        target_series = df[amount_col]
+        # Guard against multi-column DataFrame return on ambiguous matching
+        if isinstance(target_series, pd.DataFrame):
+            target_series = target_series.iloc[:, 0]
+        df["amount"] = pd.to_numeric(target_series, errors="coerce").fillna(0.0)
     else:
-        # Fallback if no amount column found: create an empty amount column
         df["amount"] = 0.0
 
     # Filter out Transfers & Payments for spending charts
     if "category" in df.columns:
         expenses_df = df[
-            (~df["category"].isin(["Transfers & Payments", "Income"])) &
+            (~df["category"].isin(["Transfers & Payments", "Transfer / Payment", "Income"])) &
             (df["amount"] > 0)
         ]
         income_df = df[
@@ -260,7 +269,6 @@ if "categorized_df" in st.session_state:
             st.warning("⚠️ Gemini API key is missing. Please provide an API key in the sidebar to use the AI Financial Advisor.")
         else:
             with st.spinner("Analyzing spending habits with Gemini AI..."):
-                # Pass data safely as records list to prevent DataFrame ambiguity error
                 tx_data = df.to_dict(orient="records") if isinstance(df, pd.DataFrame) else df
                 insights = generate_spending_insights(
                     tx_data,
