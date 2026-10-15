@@ -75,8 +75,12 @@ def classify_transaction(description: str, raw_merchant: str, amount: float) -> 
     fallback_name = cleaned_name.title() if cleaned_name else "Other Merchant"
     return fallback_name, "Other"
 
-def fallback_categorize(transactions: List[Any]) -> List[Any]:
+def fallback_categorize(transactions: Any) -> List[Any]:
     """Categorizes all records using rules."""
+    # Convert DataFrame to records if passed directly
+    if hasattr(transactions, "to_dict"):
+        transactions = transactions.to_dict(orient="records")
+
     categorized = []
     for t in transactions:
         is_dict = isinstance(t, dict)
@@ -97,39 +101,91 @@ def fallback_categorize(transactions: List[Any]) -> List[Any]:
 
     return categorized
 
-def generate_spending_insights(transactions: List[Any], user_question: Optional[str] = None, api_key: Optional[str] = None) -> str:
-    """Generates financial insights with quota retry protection."""
-    if not transactions:
+# Alias for backwards compatibility with app.py imports
+categorize_transactions = fallback_categorize
+
+def generate_spending_insights(transactions: Any, user_question: Optional[str] = None, api_key: Optional[str] = None) -> str:
+    """Generates financial insights with quota and 503 retry/fallback protection."""
+    # Safe check that supports DataFrame, None, or empty list
+    if transactions is None:
         return "No transactions available to analyze."
+    if hasattr(transactions, "empty") and transactions.empty:
+        return "No transactions available to analyze."
+    if isinstance(transactions, list) and len(transactions) == 0:
+        return "No transactions available to analyze."
+
+    # Convert DataFrame to record dicts if needed
+    if hasattr(transactions, "to_dict"):
+        transactions = transactions.to_dict(orient="records")
 
     if not api_key:
         return "⚠️ Gemini API key is missing. Please provide an API key in the sidebar to use the AI Financial Advisor."
 
+    # Prepare concise summary to avoid token limits
+    summary = []
+    for t in transactions[:35]:
+        is_dict = isinstance(t, dict)
+        m = t.get("merchant") if is_dict else getattr(t, "merchant", "")
+        c = t.get("category") if is_dict else getattr(t, "category", "")
+        a = t.get("amount") if is_dict else getattr(t, "amount", 0.0)
+        summary.append(f"{m} ({c}): {a}")
+
+    prompt = f"""
+    Act as a professional financial advisor. Analyze this spending data:
+    {json.dumps(summary)}
+
+    User Question: {user_question if user_question else "Provide an executive summary of my spending habits and suggestions to save."}
+    Keep the response clear, structured, and under 150 words.
+    """
+
+    candidate_models = [
+        "gemini-3.8-flash",
+        "gemini-3.8-flash-lite",
+        "gemini-3.5-flash"
+    ]
+
+    # Attempt via modern google-genai SDK
     try:
         from google import genai
         client = genai.Client(api_key=api_key)
-        
-        # Prepare concise summary to avoid token limit
-        summary = []
-        for t in transactions[:30]:
-            is_dict = isinstance(t, dict)
-            m = t.get("merchant") if is_dict else getattr(t, "merchant", "")
-            c = t.get("category") if is_dict else getattr(t, "category", "")
-            a = t.get("amount") if is_dict else getattr(t, "amount", 0.0)
-            summary.append(f"{m} ({c}): {a}")
+        for model_name in candidate_models:
+            for attempt in range(2):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt
+                    )
+                    if response and response.text:
+                        return response.text
+                except Exception as err:
+                    err_str = str(err)
+                    if "503" in err_str or "UNAVAILABLE" in err_str:
+                        time.sleep(1.5)
+                        continue
+                    break
+    except ImportError:
+        pass
+    except Exception:
+        pass
 
-        prompt = f"""
-        Act as a professional financial advisor. Analyze this spending data:
-        {json.dumps(summary)}
-
-        User Question: {user_question if user_question else "Provide an executive summary of my spending habits and suggestions to save."}
-        Keep the response clear, structured, and under 150 words.
-        """
-
-        response = client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=prompt
-        )
-        return response.text
+    # Fallback attempt via google-generativeai SDK
+    try:
+        import google.generativeai as legacy_genai
+        legacy_genai.configure(api_key=api_key)
+        for model_name in candidate_models:
+            for attempt in range(2):
+                try:
+                    model = legacy_genai.GenerativeModel(model_name)
+                    response = model.generate_content(prompt)
+                    if response and response.text:
+                        return response.text
+                except Exception as err:
+                    err_str = str(err)
+                    if "503" in err_str or "UNAVAILABLE" in err_str:
+                        time.sleep(1.5)
+                        continue
+                    break
     except Exception as e:
         return f"Error communicating with Gemini: {str(e)}"
+
+    return "⚠️ The Gemini API is temporarily experiencing high demand across all endpoints. Please wait 10 seconds and try again."
