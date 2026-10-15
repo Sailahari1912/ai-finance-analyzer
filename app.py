@@ -1,4 +1,5 @@
 import streamlit as st
+import tempfile
 import pandas as pd
 import plotly.express as px
 from parser import parse_bank_file
@@ -27,16 +28,23 @@ if "transactions_df" not in st.session_state:
 if run_btn:
     with st.spinner("Processing statement..."):
         try:
+           # Process Statement
+        with st.spinner("Processing statement..."):
+            parsed_data = None
             if uploaded_file is not None:
-                parsed_data = parse_bank_file(uploaded_file, password=pdf_password if pdf_password else None)
+                suffix = os.path.splitext(uploaded_file.name)[1].lower()
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                    tmp_file.write(uploaded_file.getvalue())
+                    tmp_path = tmp_file.name
+
+                try:
+                    parsed_data = parse_statement(tmp_path, password=pdf_password if pdf_password else None)
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
             else:
                 # Load fallback sample
-                parsed_data = parse_bank_file("sample.csv")
-
-            if parsed_data:
-                # Categorize using the updated universal categorizer
-                categorized_data = fallback_categorize(parsed_data)
-                df = pd.DataFrame(categorized_data)
+                parsed_data = parse_statement("sample.csv")
                 
                 # Ensure correct types
                 if "amount" in df.columns:
