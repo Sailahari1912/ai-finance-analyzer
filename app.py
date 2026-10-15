@@ -4,7 +4,21 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-from parser import parse_statement
+import parser as stmt_parser
+
+# Auto-detect parser function
+if hasattr(stmt_parser, "parse_statement"):
+    parse_statement = stmt_parser.parse_statement
+elif hasattr(stmt_parser, "parse_file"):
+    parse_statement = stmt_parser.parse_file
+elif hasattr(stmt_parser, "parse_pdf"):
+    parse_statement = stmt_parser.parse_pdf
+elif hasattr(stmt_parser, "parse_transactions"):
+    parse_statement = stmt_parser.parse_transactions
+else:
+    # Use any available parsing function
+    _candidates = [getattr(stmt_parser, a) for a in dir(stmt_parser) if callable(getattr(stmt_parser, a)) and not a.startswith("_")]
+    parse_statement = _candidates[0] if _candidates else None
 from categorizer import categorize_transactions, generate_spending_insights
 
 # Configure Streamlit Page
