@@ -17,8 +17,13 @@ elif hasattr(stmt_parser, "parse_transactions"):
     parse_statement = stmt_parser.parse_transactions
 else:
     # Use any available parsing function
-    _candidates = [getattr(stmt_parser, a) for a in dir(stmt_parser) if callable(getattr(stmt_parser, a)) and not a.startswith("_")]
+    _candidates = [
+        getattr(stmt_parser, a)
+        for a in dir(stmt_parser)
+        if callable(getattr(stmt_parser, a)) and not a.startswith("_")
+    ]
     parse_statement = _candidates[0] if _candidates else None
+
 import categorizer as cat_module
 
 # Auto-detect categorization function
@@ -29,7 +34,11 @@ if not categorize_transactions:
 # Auto-detect insights function
 generate_spending_insights = getattr(cat_module, "generate_spending_insights", None)
 if not generate_spending_insights:
-    generate_spending_insights = getattr(cat_module, "generate_spending_insight", lambda df, q, api_key=None: "Advisor ready.")
+    generate_spending_insights = getattr(
+        cat_module,
+        "generate_spending_insight",
+        lambda df, q, api_key=None: "Advisor ready."
+    )
 
 # Configure Streamlit Page
 st.set_page_config(
@@ -74,23 +83,45 @@ if st.sidebar.button("Run Categorization"):
         try:
             parsed_data = None
             if uploaded_file is not None:
-                # Save uploaded buffer into a temporary file on disk for the parser
-                suffix = os.path.splitext(uploaded_file.name)[1].lower()
-                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-                    tmp_file.write(uploaded_file.getvalue())
-                    tmp_path = tmp_file.name
+                file_name = uploaded_file.name.lower()
+                suffix = os.path.splitext(file_name)[1]
 
-                try:
-                    parsed_data = parse_statement(
-                        tmp_path,
-                        password=pdf_password if pdf_password else None
-                    )
-                finally:
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
+                # Direct CSV handling
+                if suffix == ".csv":
+                    try:
+                        df_raw = pd.read_csv(uploaded_file)
+                    except UnicodeDecodeError:
+                        uploaded_file.seek(0)
+                        df_raw = pd.read_csv(uploaded_file, encoding="latin1")
+                    parsed_data = df_raw.to_dict(orient="records")
+
+                # Direct Excel handling
+                elif suffix in [".xlsx", ".xls"]:
+                    df_raw = pd.read_excel(uploaded_file)
+                    parsed_data = df_raw.to_dict(orient="records")
+
+                # PDF handling via temp file and parser.py
+                else:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                        tmp_file.write(uploaded_file.getvalue())
+                        tmp_path = tmp_file.name
+
+                    try:
+                        if parse_statement:
+                            parsed_data = parse_statement(
+                                tmp_path,
+                                password=pdf_password if pdf_password else None
+                            )
+                    finally:
+                        if os.path.exists(tmp_path):
+                            os.remove(tmp_path)
             else:
                 # Load fallback sample statement
-                parsed_data = parse_statement("sample.csv")
+                if os.path.exists("sample.csv"):
+                    df_raw = pd.read_csv("sample.csv")
+                    parsed_data = df_raw.to_dict(orient="records")
+                elif parse_statement:
+                    parsed_data = parse_statement("sample.csv")
 
             if parsed_data:
                 # Categorize and normalize transactions
